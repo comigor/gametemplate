@@ -1,0 +1,77 @@
+name: Build & Deploy Game
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '.github/workflows/**'
+      - '.gitignore'
+      - '**.md'
+
+env:
+  BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  IS_MAIN: ${{contains(github.ref, 'master')}}
+  GODOT_VERSION: "4.2.2" # This affects download links! For example "https://downloads.tuxfamily.org/godotengine/3.4.3/Godot_v3.4.3-stable_linux_headless.64.zip"
+  PROJECT_NAME: "GameTemplate"  # insert your project name (human readable)
+  ITCH_PROJECT_NAME: "gametemplate" # insert your project name (key / url)
+  ITCH_USERNAME: "comigor" # insert your username!
+
+jobs:
+  # job id, can be anything
+  export_game:
+    # Always use ubuntu-latest for this action
+    runs-on: ubuntu-latest
+    # Add permission for release creation. Can be made narrower according to your needs
+    permissions: write-all
+    # Job name, can be anything
+    name: Export Game
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+  
+    - name: export game
+      id: export
+      # Use latest version (see releases for all versions)
+      uses: firebelley/godot-export@v5.2.1
+      with:
+        # Defining all the required inputs
+        godot_executable_download_url: https://downloads.tuxfamily.org/godotengine/${{ env.GODOT_VERSION }}/Godot_v${{ env.GODOT_VERSION }}-stable_linux.x86_64.zip
+        godot_export_templates_download_url: https://downloads.tuxfamily.org/godotengine/${{ env.GODOT_VERSION }}/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+        relative_project_path: ./
+        archive_output: true
+        cache: true
+
+      # This release action has worked well for me. However, you can most likely use any release action of your choosing.
+      # https://github.com/ncipollo/release-action
+    - name: create release
+      uses: ncipollo/release-action@v1.12.0
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        generateReleaseNotes: true
+        tag: ${{ github.ref_name }}
+        artifacts: ${{ steps.export.outputs.archive_directory }}/*
+  publish_itchio:
+    needs: [export_game]
+    if: ${{ contains(github.ref, 'master') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Exports
+        uses: actions/download-artifact@v3
+        with:
+          name: build
+          path: build
+      - name: Download + Authorize Butler
+        run: |
+          curl -L -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+          unzip butler.zip
+          chmod +x butler
+          ./butler -V
+      - name: Push Windows Export To Itch
+        run: ./butler push ./build/windows/$PROJECT_NAME.exe $ITCH_USERNAME/$ITCH_PROJECT_NAME:win --userversion-file ./build/version.txt
+      - name: Push Web Export To Itch
+        run: ./butler push ./build/web/index.html $ITCH_USERNAME/$ITCH_PROJECT_NAME:web --userversion-file ./build/version.txt
